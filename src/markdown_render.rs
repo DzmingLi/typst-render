@@ -41,7 +41,107 @@ pub fn render_markdown_to_html(source: &str) -> anyhow::Result<String> {
     let mut html_output = String::new();
     html::push_html(&mut html_output, events.into_iter());
 
-    Ok(html_output)
+    Ok(convert_callouts(&html_output))
+}
+
+/// Convert callout-style blockquotes to theorem environment divs.
+///
+/// Syntax: `> [!type] Optional Name`
+///
+/// Supported types: theorem, lemma, corollary, proposition, definition,
+/// proof, remark, example, solution.
+///
+/// Renders with the same CSS classes as Typst's fx/lib.typ:
+/// `<div class="thm-block thm-thm">...</div>`
+fn convert_callouts(html: &str) -> String {
+    let mut result = String::with_capacity(html.len());
+    let mut pos = 0;
+
+    while pos < html.len() {
+        if let Some(bq_start) = html[pos..].find("<blockquote>") {
+            let abs_start = pos + bq_start;
+            result.push_str(&html[pos..abs_start]);
+
+            if let Some(bq_end) = html[abs_start..].find("</blockquote>") {
+                let abs_end = abs_start + bq_end + "</blockquote>".len();
+                let inner = &html[abs_start + "<blockquote>".len()..abs_start + bq_end];
+
+                if let Some(callout) = parse_callout(inner) {
+                    result.push_str(&callout);
+                } else {
+                    result.push_str(&html[abs_start..abs_end]);
+                }
+                pos = abs_end;
+            } else {
+                result.push_str(&html[abs_start..]);
+                break;
+            }
+        } else {
+            result.push_str(&html[pos..]);
+            break;
+        }
+    }
+
+    result
+}
+
+fn parse_callout(inner_html: &str) -> Option<String> {
+    // Inner starts with \n<p>[!type]... Look for the pattern
+    let trimmed = inner_html.trim();
+    let content = trimmed.strip_prefix("<p>")?;
+
+    // Match [!type] at the start
+    let after_bracket = content.strip_prefix("[!")?;
+    let close = after_bracket.find(']')?;
+    let kind_str = &after_bracket[..close];
+    let rest = &after_bracket[close + 1..];
+
+    let (label, css_class) = match kind_str.to_lowercase().as_str() {
+        "theorem" | "thm" => ("Theorem", "thm"),
+        "lemma" => ("Lemma", "thm"),
+        "corollary" => ("Corollary", "thm"),
+        "proposition" => ("Proposition", "thm"),
+        "definition" | "def" => ("Definition", "defn"),
+        "proof" => ("Proof", "proof"),
+        "remark" => ("Remark", "remark"),
+        "example" => ("Example", "example"),
+        "solution" => ("Solution", "example"),
+        _ => return None,
+    };
+
+    // Extract optional name (text after ] on the same line, before </p> or newline)
+    let rest = rest.trim_start();
+    let (name, body) = if let Some(p_end) = rest.find("</p>") {
+        let first_line = rest[..p_end].trim();
+        let remaining = rest[p_end + "</p>".len()..].trim();
+        if first_line.is_empty() {
+            (None, remaining.to_string())
+        } else {
+            (Some(first_line.to_string()), remaining.to_string())
+        }
+    } else {
+        (None, rest.to_string())
+    };
+
+    let header = if let Some(name) = &name {
+        format!("<strong>{label} ({name})</strong>. ")
+    } else {
+        format!("<strong>{label}</strong>. ")
+    };
+
+    // Strip leading <p> from body if present, merge with header
+    let body = body.trim();
+    let body_html = if let Some(stripped) = body.strip_prefix("<p>") {
+        format!("<p>{header}{stripped}")
+    } else if body.is_empty() {
+        format!("<p>{header}</p>")
+    } else {
+        format!("<p>{header}</p>\n{body}")
+    };
+
+    Some(format!(
+        r#"<div class="thm-block thm-{css_class}">{body_html}</div>"#
+    ))
 }
 
 /// Render a markdown series by concatenating all chapters.
@@ -112,5 +212,36 @@ mod tests {
         let md = "| a | b |\n|---|---|\n| 1 | 2 |";
         let html = render_markdown_to_html(md).unwrap();
         assert!(html.contains("<table>"));
+    }
+
+    #[test]
+    fn test_theorem_callout() {
+        let md = "> [!theorem] Pythagorean\n> For a right triangle, $a^2 + b^2 = c^2$.";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"class="thm-block thm-thm""#), "missing thm class: {html}");
+        assert!(html.contains("Theorem (Pythagorean)"), "missing name: {html}");
+    }
+
+    #[test]
+    fn test_definition_callout() {
+        let md = "> [!definition]\n> A group is a set with a binary operation.";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"class="thm-block thm-defn""#), "missing defn class: {html}");
+        assert!(html.contains("<strong>Definition</strong>"), "missing label: {html}");
+    }
+
+    #[test]
+    fn test_proof_callout() {
+        let md = "> [!proof]\n> Obvious.";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"class="thm-block thm-proof""#), "missing proof class: {html}");
+    }
+
+    #[test]
+    fn test_regular_blockquote_unchanged() {
+        let md = "> This is a normal blockquote.";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains("<blockquote>"), "blockquote should remain: {html}");
+        assert!(!html.contains("thm-block"), "should not be a theorem: {html}");
     }
 }

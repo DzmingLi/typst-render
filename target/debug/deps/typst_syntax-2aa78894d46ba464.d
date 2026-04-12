@@ -1,0 +1,23 @@
+/home/lee/typst-render/target/debug/deps/typst_syntax-2aa78894d46ba464.d: /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/lib.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/ast.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/package.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/file.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/highlight.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/kind.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/lexer.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/lines.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/node.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/parser.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/path.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/reparser.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/set.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/source.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/span.rs
+
+/home/lee/typst-render/target/debug/deps/libtypst_syntax-2aa78894d46ba464.rmeta: /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/lib.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/ast.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/package.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/file.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/highlight.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/kind.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/lexer.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/lines.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/node.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/parser.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/path.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/reparser.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/set.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/source.rs /home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/span.rs
+
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/lib.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/ast.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/package.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/file.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/highlight.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/kind.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/lexer.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/lines.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/node.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/parser.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/path.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/reparser.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/set.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/source.rs:
+/home/lee/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/typst-syntax-0.14.2/src/span.rs:
+
+# env-dep:CARGO_PKG_VERSION_MAJOR=0
+# env-dep:CARGO_PKG_VERSION_MINOR=14
+# env-dep:CARGO_PKG_VERSION_PATCH=2
