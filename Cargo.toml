@@ -1,9 +1,9 @@
 [package]
-name = "typst-render"
+name = "fx-renderer"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
-description = "Render Typst and Markdown to HTML with MathML math support"
+license = "AGPL-3.0-or-later"
+description = "Shared rendering library: Typst, Markdown, and LaTeX to HTML with MathML math support"
 
 [dependencies]
 anyhow = "1"

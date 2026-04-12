@@ -9,6 +9,18 @@ pub use convert::convert_format;
 pub use markdown_render::{render_markdown_to_html, render_markdown_series, render_latex_to_mathml};
 pub use typst_render::{render_typst_to_html, render_typst_to_html_with_images, render_series_to_html, render_series_full_html, set_packages_dir, RenderConfig};
 
+/// Fedi-Xanadu standard Typst library (theorem environments, layout helpers).
+/// Consumers can inject this via `RenderConfig::extra_files`.
+pub const FX_LIB_TYP: &str = include_str!("../typst-libs/fx/lib.typ");
+
+/// Build a `RenderConfig` that imports the bundled `fx/lib.typ`.
+pub fn fx_render_config() -> RenderConfig {
+    RenderConfig {
+        extra_preamble: "#import \"fx/lib.typ\": *\n".to_string(),
+        extra_files: vec![("fx/lib.typ".to_string(), FX_LIB_TYP.to_string())],
+    }
+}
+
 /// Map a content format identifier to its canonical file extension.
 pub fn format_extension(format: &str) -> &'static str {
     match format {
