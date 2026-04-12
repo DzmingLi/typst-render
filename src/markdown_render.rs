@@ -57,6 +57,17 @@ pub fn render_markdown_series(chapters: &[(String, String)]) -> anyhow::Result<S
     Ok(full_html)
 }
 
+/// Render a single LaTeX math formula to MathML HTML.
+pub fn render_latex_to_mathml(formula: &str, display: bool) -> anyhow::Result<String> {
+    let style = if display {
+        latex2mathml::DisplayStyle::Block
+    } else {
+        latex2mathml::DisplayStyle::Inline
+    };
+    latex2mathml::latex_to_mathml(formula, style)
+        .map_err(|e| anyhow::anyhow!("LaTeX to MathML conversion failed: {e}"))
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
