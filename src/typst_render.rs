@@ -320,17 +320,7 @@ pub fn render_series_full_html_with_config(repo_path: &Path, config: &RenderConf
         std::fs::read_to_string(&main_path)
             .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", main_path.display()))?
     } else {
-        let mut chapter_files = Vec::new();
-        let chapters_dir = repo_path.join("chapters");
-        if chapters_dir.exists() {
-            for entry in std::fs::read_dir(&chapters_dir)?.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.ends_with(".typ") {
-                    chapter_files.push(name);
-                }
-            }
-        }
-        chapter_files.sort();
+        let chapter_files = read_chapter_order(repo_path, ".typ");
         build_auto_concat_source_from_files(&chapter_files, repo_path)?
     };
 
@@ -342,11 +332,10 @@ fn build_auto_concat_source(
     chapter_ids: &[(String, usize)],
     repo_path: &Path,
 ) -> anyhow::Result<String> {
-    let chapters_dir = repo_path.join("chapters");
     let mut files = Vec::new();
     for (uri, idx) in chapter_ids {
         let tid = uri.rsplit('/').next().unwrap_or("unknown");
-        if let Ok(entries) = std::fs::read_dir(&chapters_dir) {
+        if let Ok(entries) = std::fs::read_dir(repo_path) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 if name.starts_with(tid) && name.ends_with(".typ") {
@@ -362,6 +351,37 @@ fn build_auto_concat_source(
     build_auto_concat_source_from_files(&file_names, repo_path)
 }
 
+/// Read chapter order from meta.json. Falls back to sorted directory scan.
+pub fn read_chapter_order(repo_path: &Path, ext: &str) -> Vec<String> {
+    // Try meta.json first
+    if let Ok(data) = std::fs::read_to_string(repo_path.join("meta.json")) {
+        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&data) {
+            if let Some(order) = meta.get("chapter_order").and_then(|v| v.as_array()) {
+                let files: Vec<String> = order
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|f| repo_path.join(f).exists())
+                    .collect();
+                if !files.is_empty() {
+                    return files;
+                }
+            }
+        }
+    }
+    // Fallback: scan repo root for matching files, sorted by name
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(repo_path) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(ext) {
+                files.push(name);
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
 fn build_auto_concat_source_from_files(
     files: &[String],
     repo_path: &Path,
@@ -370,7 +390,7 @@ fn build_auto_concat_source_from_files(
 
     for (i, name) in files.iter().enumerate() {
         source.push_str(&format!(
-            "\n#html.elem(\"section\", attrs: (\"data-chapter\": \"{i}\"))[\n#include \"chapters/{name}\"\n]\n"
+            "\n#html.elem(\"section\", attrs: (\"data-chapter\": \"{i}\"))[\n#include \"{name}\"\n]\n"
         ));
     }
 
