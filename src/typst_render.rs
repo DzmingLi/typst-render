@@ -106,14 +106,8 @@ impl RenderWorld {
         // Build virtual filesystem
         let mut sources = HashMap::new();
 
-        // Add mathyml library files
-        for (path, content) in MATHYML_FILES {
-            let id = FileId::new(None, VirtualPath::new(path));
-            sources.insert(id, Source::new(id, (*content).into()));
-        }
-
-        // Add extra virtual files from config
-        for (path, content) in extra_files {
+        // Add library + extra virtual files
+        for (path, content) in MATHYML_FILES.iter().chain(extra_files.iter()) {
             let id = FileId::new(None, VirtualPath::new(path));
             sources.insert(id, Source::new(id, (*content).into()));
         }
