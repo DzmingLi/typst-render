@@ -10,7 +10,7 @@ use pulldown_cmark::{Options, Parser, Event, html};
 /// - `??? type "title"` — collapsible (closed by default)
 /// - `???+ type "title"` — collapsible (open by default)
 pub fn render_markdown_to_html(source: &str) -> anyhow::Result<String> {
-    let preprocessed = preprocess_admonitions(source);
+    let preprocessed = preprocess_ial_owned(&preprocess_admonitions(source));
 
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -185,6 +185,74 @@ fn preprocess_admonitions(source: &str) -> String {
     }
 
     result
+}
+
+// ── Inline Attribute Lists (IAL) pre-processing ──────────────────────────
+//
+// kramdown / PHP Markdown Extra syntax: `{: .class #id }`
+// A line containing only `{: ... }` applies attributes to the preceding block.
+// We handle this by removing the IAL line from source and wrapping the
+// preceding paragraph/element in a `<div>` with the specified attributes,
+// or for inline images, by injecting class/id into the image markdown.
+
+/// Pre-process IAL `{: .class #id }` lines in markdown source.
+/// Strips IAL lines and wraps the preceding block in an HTML `<div>`.
+fn preprocess_ial_owned(source: &str) -> String {
+    let ial_re = regex::Regex::new(r"^\{:\s*([^}]+)\}\s*$").unwrap();
+    let lines: Vec<&str> = source.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+
+    let mut i = 0;
+    while i < lines.len() {
+        if let Some(caps) = ial_re.captures(lines[i].trim()) {
+            let attrs_str = caps.get(1).unwrap().as_str().trim();
+            let mut classes = Vec::new();
+            let mut id: Option<&str> = None;
+            for part in attrs_str.split_whitespace() {
+                if let Some(cls) = part.strip_prefix('.') {
+                    classes.push(cls);
+                } else if let Some(i_val) = part.strip_prefix('#') {
+                    id = Some(i_val);
+                }
+            }
+
+            if classes.is_empty() && id.is_none() {
+                out.push(lines[i].to_string());
+                i += 1;
+                continue;
+            }
+
+            let mut attr_parts = Vec::new();
+            if !classes.is_empty() {
+                attr_parts.push(format!("class=\"{}\"", classes.join(" ")));
+            }
+            if let Some(id_val) = id {
+                attr_parts.push(format!("id=\"{id_val}\""));
+            }
+            let attr_str = attr_parts.join(" ");
+
+            // Find preceding non-empty content and wrap it
+            let mut prev_idx = None;
+            for j in (0..out.len()).rev() {
+                if !out[j].trim().is_empty() {
+                    prev_idx = Some(j);
+                    break;
+                }
+            }
+
+            if let Some(idx) = prev_idx {
+                let prev = out[idx].clone();
+                out[idx] = format!("<div {attr_str}>\n\n{prev}\n\n</div>");
+            }
+            // Skip the IAL line
+            i += 1;
+        } else {
+            out.push(lines[i].to_string());
+            i += 1;
+        }
+    }
+
+    out.join("\n")
 }
 
 /// Convert callout-style blockquotes to theorem environment divs.
@@ -471,5 +539,36 @@ mod tests {
         let md = "Text[^1].\n\n[^1]: Footnote content.\n";
         let html = render_markdown_to_html(md).unwrap();
         assert!(html.contains("Footnote content"), "missing footnote: {html}");
+    }
+
+    // ── IAL tests ──
+
+    #[test]
+    fn test_ial_class() {
+        let md = "![img](url)\n\nCaption text\n{: .caption }\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"class="caption""#), "missing class: {html}");
+    }
+
+    #[test]
+    fn test_ial_id() {
+        let md = "Some paragraph.\n{: #my-para }\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"id="my-para""#), "missing id: {html}");
+    }
+
+    #[test]
+    fn test_ial_multiple_classes() {
+        let md = "Text\n{: .img-inline .centered }\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains("img-inline"), "missing class: {html}");
+        assert!(html.contains("centered"), "missing class: {html}");
+    }
+
+    #[test]
+    fn test_ial_no_match() {
+        let md = "Normal text.\n\nMore text.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(!html.contains("{:"), "IAL should not appear in output: {html}");
     }
 }
