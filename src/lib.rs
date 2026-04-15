@@ -1,6 +1,7 @@
 pub mod convert;
 pub mod heading_extract;
 pub mod markdown_render;
+pub mod md_plugins;
 pub mod typst_render;
 
 use std::path::Path;
