@@ -4,7 +4,14 @@ use pulldown_cmark::{Options, Parser, Event, html};
 ///
 /// Math delimiters: `$...$` for inline, `$$...$$` for display.
 /// LaTeX math is converted to MathML server-side for native browser rendering.
+///
+/// Also supports MkDocs-style admonitions:
+/// - `!!! type "title"` — always-open admonition
+/// - `??? type "title"` — collapsible (closed by default)
+/// - `???+ type "title"` — collapsible (open by default)
 pub fn render_markdown_to_html(source: &str) -> anyhow::Result<String> {
+    let preprocessed = preprocess_admonitions(source);
+
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
@@ -13,7 +20,7 @@ pub fn render_markdown_to_html(source: &str) -> anyhow::Result<String> {
     options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
     options.insert(Options::ENABLE_MATH);
 
-    let parser = Parser::new_ext(source, options);
+    let parser = Parser::new_ext(&preprocessed, options);
 
     // Transform math events into MathML
     let events: Vec<Event<'_>> = parser.map(|event| match event {
@@ -42,6 +49,142 @@ pub fn render_markdown_to_html(source: &str) -> anyhow::Result<String> {
     html::push_html(&mut html_output, events.into_iter());
 
     Ok(convert_callouts(&html_output))
+}
+
+// ── Admonition pre-processing ────────────────────────────────────────────
+//
+// MkDocs-Material admonition syntax is not part of CommonMark, so we convert
+// it to raw HTML before handing the source to pulldown-cmark.
+//
+// Supported forms:
+//   !!! note "Title"          → <div class="admonition note"><p class="admonition-title">Title</p>...
+//   ??? warning "Title"       → <details class="admonition warning"><summary>Title</summary>...
+//   ???+ tip "Title"          → <details class="admonition tip" open><summary>Title</summary>...
+//   !!! note                  → title defaults to capitalised type name
+//
+// Body lines must be indented by 4 spaces. Nesting is supported.
+
+/// Recognised admonition type names (matches MkDocs-Material).
+const ADMONITION_TYPES: &[&str] = &[
+    "note", "abstract", "info", "tip", "success", "question",
+    "warning", "failure", "danger", "bug", "example", "quote",
+];
+
+fn admonition_type_valid(ty: &str) -> bool {
+    ADMONITION_TYPES.contains(&ty.to_lowercase().as_str())
+}
+
+/// Parse an admonition header line. Returns (is_collapsible, is_open, type, title).
+fn parse_admonition_header(line: &str) -> Option<(bool, bool, String, String)> {
+    let trimmed = line.trim_end();
+    let (marker, rest) = if let Some(r) = trimmed.strip_prefix("???+ ") {
+        ("???+", r)
+    } else if let Some(r) = trimmed.strip_prefix("??? ") {
+        ("???", r)
+    } else if let Some(r) = trimmed.strip_prefix("!!! ") {
+        ("!!!", r)
+    } else {
+        return None;
+    };
+
+    let rest = rest.trim();
+    // Extract type (first word)
+    let (ty, after_type) = match rest.find(|c: char| c.is_whitespace()) {
+        Some(i) => (&rest[..i], rest[i..].trim()),
+        None => (rest, ""),
+    };
+
+    if !admonition_type_valid(ty) {
+        return None;
+    }
+
+    let ty_lower = ty.to_lowercase();
+
+    // Extract title: either "quoted" or plain text, or default to type name
+    let title = if after_type.starts_with('"') && after_type.ends_with('"') && after_type.len() >= 2 {
+        after_type[1..after_type.len() - 1].to_string()
+    } else if !after_type.is_empty() {
+        after_type.to_string()
+    } else {
+        // Default title: capitalised type
+        let mut chars = ty_lower.chars();
+        match chars.next() {
+            Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            None => ty_lower.clone(),
+        }
+    };
+
+    let is_collapsible = marker != "!!!";
+    let is_open = marker == "???+";
+
+    Some((is_collapsible, is_open, ty_lower, title))
+}
+
+/// Pre-process admonition blocks in markdown source, converting them to HTML.
+fn preprocess_admonitions(source: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut result = String::with_capacity(source.len());
+    let mut i = 0;
+
+    while i < lines.len() {
+        if let Some((is_collapsible, is_open, ty, title)) = parse_admonition_header(lines[i]) {
+            // Collect indented body lines (4 spaces)
+            let mut body_lines: Vec<&str> = Vec::new();
+            let mut j = i + 1;
+            while j < lines.len() {
+                let line = lines[j];
+                if line.starts_with("    ") {
+                    body_lines.push(&line[4..]);
+                    j += 1;
+                } else if line.trim().is_empty() {
+                    // Blank line within block — keep it if more indented lines follow
+                    let mut has_more = false;
+                    for k in (j + 1)..lines.len() {
+                        if lines[k].starts_with("    ") {
+                            has_more = true;
+                            break;
+                        } else if !lines[k].trim().is_empty() {
+                            break;
+                        }
+                    }
+                    if has_more {
+                        body_lines.push("");
+                        j += 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            // Recursively process the body (supports nested admonitions)
+            let body_source = body_lines.join("\n");
+            let body_processed = preprocess_admonitions(&body_source);
+
+            // Render body markdown to HTML inline
+            let title_escaped = html_escape(&title);
+
+            if is_collapsible {
+                let open_attr = if is_open { " open" } else { "" };
+                result.push_str(&format!(
+                    "\n<details class=\"admonition {ty}\"{open_attr}>\n<summary>{title_escaped}</summary>\n\n{body_processed}\n\n</details>\n\n"
+                ));
+            } else {
+                result.push_str(&format!(
+                    "\n<div class=\"admonition {ty}\">\n<p class=\"admonition-title\">{title_escaped}</p>\n\n{body_processed}\n\n</div>\n\n"
+                ));
+            }
+
+            i = j;
+        } else {
+            result.push_str(lines[i]);
+            result.push('\n');
+            i += 1;
+        }
+    }
+
+    result
 }
 
 /// Convert callout-style blockquotes to theorem environment divs.
@@ -243,5 +386,90 @@ mod tests {
         let html = render_markdown_to_html(md).unwrap();
         assert!(html.contains("<blockquote>"), "blockquote should remain: {html}");
         assert!(!html.contains("thm-block"), "should not be a theorem: {html}");
+    }
+
+    // ── Admonition tests ──
+
+    #[test]
+    fn test_admonition_basic() {
+        let md = "!!! note \"Important\"\n    This is a note.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"class="admonition note""#), "missing class: {html}");
+        assert!(html.contains(r#"class="admonition-title">Important"#), "missing title: {html}");
+        assert!(html.contains("This is a note."), "missing body: {html}");
+    }
+
+    #[test]
+    fn test_admonition_default_title() {
+        let md = "!!! warning\n    Be careful.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"class="admonition warning""#), "missing class: {html}");
+        assert!(html.contains("Warning"), "missing default title: {html}");
+    }
+
+    #[test]
+    fn test_admonition_collapsible_closed() {
+        let md = "??? tip \"Hint\"\n    Some hint.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains("<details"), "should be details: {html}");
+        assert!(html.contains(r#"class="admonition tip""#), "missing class: {html}");
+        assert!(html.contains("<summary>Hint</summary>"), "missing summary: {html}");
+        assert!(!html.contains("open"), "should not be open: {html}");
+    }
+
+    #[test]
+    fn test_admonition_collapsible_open() {
+        let md = "???+ example \"Demo\"\n    Example content.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains("<details"), "should be details: {html}");
+        assert!(html.contains("open"), "should be open: {html}");
+        assert!(html.contains("<summary>Demo</summary>"), "missing summary: {html}");
+    }
+
+    #[test]
+    fn test_admonition_multiline_body() {
+        let md = "!!! info \"Multi\"\n    Line one.\n\n    Line two.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains("Line one."), "missing line 1: {html}");
+        assert!(html.contains("Line two."), "missing line 2: {html}");
+    }
+
+    #[test]
+    fn test_admonition_with_markdown_body() {
+        let md = "!!! note \"Rich\"\n    Some **bold** and `code`.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains("<strong>bold</strong>"), "missing bold: {html}");
+        assert!(html.contains("<code>code</code>"), "missing code: {html}");
+    }
+
+    #[test]
+    fn test_admonition_nested() {
+        let md = "!!! note \"Outer\"\n    Outer text.\n\n    !!! tip \"Inner\"\n        Inner text.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"class="admonition note""#), "missing outer: {html}");
+        assert!(html.contains(r#"class="admonition tip""#), "missing inner: {html}");
+        assert!(html.contains("Outer text."), "missing outer body: {html}");
+        assert!(html.contains("Inner text."), "missing inner body: {html}");
+    }
+
+    #[test]
+    fn test_admonition_does_not_match_invalid_type() {
+        let md = "!!! foobar \"Title\"\n    Body.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(!html.contains("admonition"), "should not match invalid type: {html}");
+    }
+
+    #[test]
+    fn test_heading_attributes() {
+        let md = "## Hello {#my-id}\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"id="my-id""#), "missing heading id: {html}");
+    }
+
+    #[test]
+    fn test_footnotes() {
+        let md = "Text[^1].\n\n[^1]: Footnote content.\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains("Footnote content"), "missing footnote: {html}");
     }
 }
