@@ -235,9 +235,10 @@ fn download_and_extract_package(url: &str, dest: &Path) -> anyhow::Result<()> {
 }
 
 /// Render Typst source to HTML, resolving images from a repo directory.
+/// Inline base64 images are extracted to `{repo_path}/_rendered/` as separate files.
 pub fn render_typst_to_html_with_images(source: &str, repo_path: &Path) -> anyhow::Result<String> {
     let world = RenderWorld::with_repo(source, Some(repo_path));
-    render_world(&world)
+    render_world_with_extraction(&world, Some(repo_path))
 }
 
 /// Render Typst source to HTML using Typst's native HTML export.
@@ -249,6 +250,10 @@ pub fn render_typst_to_html(source: &str) -> anyhow::Result<String> {
 }
 
 pub fn render_world(world: &RenderWorld) -> anyhow::Result<String> {
+    render_world_with_extraction(world, None)
+}
+
+pub fn render_world_with_extraction(world: &RenderWorld, repo_path: Option<&Path>) -> anyhow::Result<String> {
     let warned = typst::compile::<HtmlDocument>(&world);
     let document = warned.output.map_err(|diags| {
         let msgs: Vec<String> = diags.iter().map(|d| d.message.to_string()).collect();
@@ -260,7 +265,89 @@ pub fn render_world(world: &RenderWorld) -> anyhow::Result<String> {
         anyhow::anyhow!("Typst HTML export errors: {}", msgs.join("; "))
     })?;
 
-    Ok(extract_body(&html))
+    let body = extract_body(&html);
+    Ok(extract_inline_images(&body, repo_path))
+}
+
+/// Extract base64-inlined images from HTML, write them as files to `{repo_path}/_rendered/`,
+/// and replace the data URIs with relative paths.
+/// Returns the modified HTML. If repo_path is None, returns HTML unchanged.
+pub fn extract_inline_images(html: &str, repo_path: Option<&Path>) -> String {
+    let repo = match repo_path {
+        Some(p) => p,
+        None => return html.to_string(),
+    };
+
+    let out_dir = repo.join("_rendered");
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        tracing::warn!("cannot create _rendered dir: {e}");
+        return html.to_string();
+    }
+
+    let mut result = String::with_capacity(html.len());
+    let mut pos = 0;
+    let bytes = html.as_bytes();
+
+    while pos < bytes.len() {
+        // Look for src="data: or src='data:
+        if let Some(offset) = html[pos..].find("src=\"data:") {
+            let src_start = pos + offset + 5; // after src="
+            let data_start = src_start; // points to "data:..."
+
+            // Find closing quote
+            if let Some(end_offset) = html[data_start..].find('"') {
+                let data_uri = &html[data_start..data_start + end_offset];
+
+                // Parse: data:{mime};base64,{payload}
+                if let Some((mime_ext, file_bytes)) = parse_data_uri(data_uri) {
+                    let hash = blake3::hash(&file_bytes);
+                    let hash_str = &hash.to_hex()[..16];
+                    let filename = format!("{hash_str}.{mime_ext}");
+                    let file_path = out_dir.join(&filename);
+
+                    if !file_path.exists() {
+                        if let Err(e) = std::fs::write(&file_path, &file_bytes) {
+                            tracing::warn!("failed to write extracted image {filename}: {e}");
+                            // Keep original data URI
+                            result.push_str(&html[pos..data_start + end_offset]);
+                            pos = data_start + end_offset;
+                            continue;
+                        }
+                    }
+
+                    // Write everything before src=", then the new src
+                    result.push_str(&html[pos..src_start]);
+                    result.push_str(&format!("_rendered/{filename}"));
+                    pos = data_start + end_offset;
+                    continue;
+                }
+            }
+        }
+
+        // No more data URIs found — copy the rest
+        result.push_str(&html[pos..]);
+        break;
+    }
+
+    result
+}
+
+fn parse_data_uri(uri: &str) -> Option<(&'static str, Vec<u8>)> {
+    let rest = uri.strip_prefix("data:")?;
+    let (mime, payload) = rest.split_once(";base64,")?;
+
+    let ext = match mime {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        _ => "bin",
+    };
+
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD.decode(payload).ok()?;
+    Some((ext, decoded))
 }
 
 fn extract_body(html: &str) -> String {
