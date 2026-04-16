@@ -35,12 +35,16 @@ const MATHYML_FILES: &[(&str, &str)] = &[
 /// Default preamble: import mathyml for MathML math rendering.
 const DEFAULT_PREAMBLE: &str = r#"#import "mathyml/lib.typ": try-to-mathml, include-mathfont
 #show math.equation: try-to-mathml
+#set par(justify: false)
+#set page(width: auto, height: auto, margin: 0pt)
 "#;
 
 /// Extended preamble for series documents (heading numbering for cross-references).
 const SERIES_PREAMBLE: &str = r#"#import "mathyml/lib.typ": try-to-mathml, include-mathfont
 #show math.equation: try-to-mathml
 #set heading(numbering: "1.1")
+#set par(justify: false)
+#set page(width: auto, height: auto, margin: 0pt)
 "#;
 
 /// Configuration for customizing the Typst rendering environment.
