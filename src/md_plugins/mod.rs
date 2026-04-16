@@ -7,5 +7,6 @@
 
 pub mod admonition;
 pub mod callout;
+pub mod directive;
 pub mod ial;
 pub mod math;

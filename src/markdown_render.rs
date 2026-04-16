@@ -32,6 +32,7 @@ fn build_parser() -> markdown_it::MarkdownIt {
     md_plugins::admonition::add(&mut md);
     md_plugins::ial::add(&mut md);
     md_plugins::callout::add(&mut md);
+    md_plugins::directive::add(&mut md);
 
     md
 }
@@ -225,6 +226,52 @@ mod tests {
         let md = "> This is a normal blockquote.";
         let html = render_markdown_to_html(md).unwrap();
         assert!(html.contains("<blockquote>"), "blockquote should remain: {html}");
+    }
+
+    // ── Directive tests ──
+
+    #[test]
+    fn test_colon_admonition() {
+        let md = ":::{note}\nThis is a note.\n:::\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"class="admonition note""#), "missing class: {html}");
+        assert!(html.contains("This is a note."), "missing body: {html}");
+    }
+
+    #[test]
+    fn test_colon_admonition_with_title() {
+        let md = ":::{warning} Be careful!\nDangerous stuff here.\n:::\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"admonition warning"#), "missing class: {html}");
+        assert!(html.contains("Be careful!"), "missing title: {html}");
+    }
+
+    #[test]
+    fn test_youtube_embed() {
+        let md = ":::{youtube} dQw4w9WgXcQ\n:::\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"), "missing embed: {html}");
+        assert!(html.contains("iframe"), "missing iframe: {html}");
+    }
+
+    #[test]
+    fn test_figure() {
+        let md = ":::{figure} https://example.com/img.png\n:alt: A photo\n:width: 80%\n\nThis is the caption.\n:::\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains("<figure"), "missing figure: {html}");
+        assert!(html.contains(r#"src="https://example.com/img.png""#), "missing src: {html}");
+        assert!(html.contains(r#"alt="A photo""#), "missing alt: {html}");
+        assert!(html.contains("width:80%"), "missing width: {html}");
+        assert!(html.contains("<figcaption>"), "missing figcaption: {html}");
+        assert!(html.contains("This is the caption."), "missing caption: {html}");
+    }
+
+    #[test]
+    fn test_nested_directives() {
+        let md = "::::{note}\nOuter\n\n:::{tip}\nInner\n:::\n\n::::\n";
+        let html = render_markdown_to_html(md).unwrap();
+        assert!(html.contains(r#"admonition note"#), "missing outer: {html}");
+        assert!(html.contains(r#"admonition tip"#), "missing inner: {html}");
     }
 
     // ── Integration test ──
