@@ -8,7 +8,7 @@ use typst::syntax::{FileId, Source, VirtualPath};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Feature, Features, Library, LibraryExt, World};
-use typst_html::HtmlDocument;
+use typst_html::{HtmlAttr, HtmlDocument, HtmlElement, HtmlNode};
 
 /// Global packages cache directory. Set via `set_packages_dir()`.
 static PACKAGES_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -255,81 +255,60 @@ pub fn render_world(world: &RenderWorld) -> anyhow::Result<String> {
 
 pub fn render_world_with_extraction(world: &RenderWorld, repo_path: Option<&Path>) -> anyhow::Result<String> {
     let warned = typst::compile::<HtmlDocument>(&world);
-    let document = warned.output.map_err(|diags| {
+    let mut document = warned.output.map_err(|diags| {
         let msgs: Vec<String> = diags.iter().map(|d| d.message.to_string()).collect();
         anyhow::anyhow!("Typst compilation errors: {}", msgs.join("; "))
     })?;
+
+    // Extract base64-inlined images at the document tree level,
+    // before serialization to HTML string.
+    if let Some(repo) = repo_path {
+        externalize_images(&mut document.root, repo);
+    }
 
     let html = typst_html::html(&document).map_err(|diags| {
         let msgs: Vec<String> = diags.iter().map(|d| d.message.to_string()).collect();
         anyhow::anyhow!("Typst HTML export errors: {}", msgs.join("; "))
     })?;
 
-    let body = extract_body(&html);
-    Ok(extract_inline_images(&body, repo_path))
+    Ok(extract_body(&html))
 }
 
-/// Extract base64-inlined images from HTML, write them as files to `{repo_path}/_rendered/`,
-/// and replace the data URIs with relative paths.
-/// Returns the modified HTML. If repo_path is None, returns HTML unchanged.
-pub fn extract_inline_images(html: &str, repo_path: Option<&Path>) -> String {
-    let repo = match repo_path {
-        Some(p) => p,
-        None => return html.to_string(),
-    };
+/// Walk the HtmlDocument tree, find `<img src="data:...">` attributes,
+/// write the decoded image data to `{repo_path}/_rendered/{hash}.{ext}`,
+/// and replace the `src` value with the relative path.
+fn externalize_images(element: &mut HtmlElement, repo_path: &Path) {
+    let src_attr = HtmlAttr::constant("src");
+    let out_dir = repo_path.join("_rendered");
 
-    let out_dir = repo.join("_rendered");
-    if let Err(e) = std::fs::create_dir_all(&out_dir) {
-        tracing::warn!("cannot create _rendered dir: {e}");
-        return html.to_string();
-    }
+    for (attr, value) in element.attrs.0.make_mut().iter_mut() {
+        if *attr == src_attr && value.starts_with("data:") {
+            if let Some((ext, decoded)) = parse_data_uri(value) {
+                let hash = blake3::hash(&decoded);
+                let hash_str = &hash.to_hex()[..16];
+                let filename = format!("{hash_str}.{ext}");
 
-    let mut result = String::with_capacity(html.len());
-    let mut pos = 0;
-    let bytes = html.as_bytes();
-
-    while pos < bytes.len() {
-        // Look for src="data: or src='data:
-        if let Some(offset) = html[pos..].find("src=\"data:") {
-            let src_start = pos + offset + 5; // after src="
-            let data_start = src_start; // points to "data:..."
-
-            // Find closing quote
-            if let Some(end_offset) = html[data_start..].find('"') {
-                let data_uri = &html[data_start..data_start + end_offset];
-
-                // Parse: data:{mime};base64,{payload}
-                if let Some((mime_ext, file_bytes)) = parse_data_uri(data_uri) {
-                    let hash = blake3::hash(&file_bytes);
-                    let hash_str = &hash.to_hex()[..16];
-                    let filename = format!("{hash_str}.{mime_ext}");
-                    let file_path = out_dir.join(&filename);
-
-                    if !file_path.exists() {
-                        if let Err(e) = std::fs::write(&file_path, &file_bytes) {
-                            tracing::warn!("failed to write extracted image {filename}: {e}");
-                            // Keep original data URI
-                            result.push_str(&html[pos..data_start + end_offset]);
-                            pos = data_start + end_offset;
-                            continue;
-                        }
+                // Ensure output directory exists (once, lazily)
+                let _ = std::fs::create_dir_all(&out_dir);
+                let file_path = out_dir.join(&filename);
+                if !file_path.exists() {
+                    if let Err(e) = std::fs::write(&file_path, &decoded) {
+                        tracing::warn!("failed to write extracted image {filename}: {e}");
+                        continue;
                     }
-
-                    // Write everything before src=", then the new src
-                    result.push_str(&html[pos..src_start]);
-                    result.push_str(&format!("_rendered/{filename}"));
-                    pos = data_start + end_offset;
-                    continue;
                 }
+
+                *value = format!("_rendered/{filename}").into();
             }
         }
-
-        // No more data URIs found — copy the rest
-        result.push_str(&html[pos..]);
-        break;
     }
 
-    result
+    // Recurse into children
+    for child in element.children.make_mut().iter_mut() {
+        if let HtmlNode::Element(elem) = child {
+            externalize_images(elem, repo_path);
+        }
+    }
 }
 
 fn parse_data_uri(uri: &str) -> Option<(&'static str, Vec<u8>)> {
