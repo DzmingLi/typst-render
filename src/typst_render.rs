@@ -253,6 +253,131 @@ pub fn render_world(world: &RenderWorld) -> anyhow::Result<String> {
     render_world_with_extraction(world, None)
 }
 
+/// Compile the series source and collect `<nbt-chapter>` and `<nbt-summary>`
+/// metadata nodes in document order.
+///
+/// Authors annotate chapters with typst's native `#metadata()` function +
+/// label; the extractor just queries the introspector after compilation.
+/// The preamble for series repos (`SERIES_PREAMBLE`) is applied so the
+/// source resolves the same way as during rendering.
+///
+/// # Example
+///
+/// ```typst
+/// = Introduction
+/// #metadata((teaches: ("intro",), prereqs: (("basics", "required"),))) <nbt-chapter>
+///
+/// Visible summary sentence. <nbt-summary>
+/// ```
+pub fn extract_series_metadata(
+    repo_path: &Path,
+    config: &RenderConfig,
+) -> anyhow::Result<SeriesMetadata> {
+    let main_path = repo_path.join("main.typ");
+    let source = if main_path.exists() {
+        std::fs::read_to_string(&main_path)
+            .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", main_path.display()))?
+    } else {
+        let chapter_files = read_chapter_order(repo_path, ".typ");
+        build_auto_concat_source_from_files(&chapter_files, repo_path)?
+    };
+    let world = RenderWorld::with_series_preamble(&source, Some(repo_path), config);
+    query_labels(&world)
+}
+
+/// Chapter-level and summary metadata extracted from a compiled Typst series.
+#[derive(Debug, Default, Clone)]
+pub struct SeriesMetadata {
+    /// `#metadata(...) <nbt-chapter>` values, serialised to JSON and ordered
+    /// by document position. Each entry typically contains `teaches` (array
+    /// of tag ids) and `prereqs` (array of `(tag_id, type)` tuples).
+    pub chapter_metadata: Vec<serde_json::Value>,
+    /// `<nbt-summary>` block contents as plain text, ordered by document
+    /// position. These double as visible lead paragraphs.
+    pub summaries: Vec<String>,
+}
+
+fn query_labels(world: &RenderWorld) -> anyhow::Result<SeriesMetadata> {
+    use typst::foundations::Selector;
+    use typst::introspection::Location;
+
+    let warned = typst::compile::<HtmlDocument>(world);
+    let document = warned.output.map_err(|diags| {
+        let msgs: Vec<String> = diags.iter().map(|d| d.message.to_string()).collect();
+        anyhow::anyhow!("Typst compilation errors: {}", msgs.join("; "))
+    })?;
+
+    let chapter_label = typst::foundations::Label::construct(
+        typst::foundations::Str::from("nbt-chapter"),
+    ).map_err(|e| anyhow::anyhow!("invalid label: {e}"))?;
+    let summary_label = typst::foundations::Label::construct(
+        typst::foundations::Str::from("nbt-summary"),
+    ).map_err(|e| anyhow::anyhow!("invalid label: {e}"))?;
+
+    let introspector = &document.introspector;
+
+    // Helper: sort results by location so the output order matches document order.
+    let by_location = |content: &typst::foundations::Content| -> Option<Location> {
+        content.location()
+    };
+
+    // <nbt-chapter>: typst's #metadata element exposes its payload via the
+    // `value` field. Iterate, serialize each.
+    let mut chapters: Vec<(Option<Location>, serde_json::Value)> = Vec::new();
+    for c in introspector.query(&Selector::Label(chapter_label)) {
+        let value_field = c.field_by_name("value").ok();
+        let loc = by_location(&c);
+        if let Some(v) = value_field {
+            let json = serde_json::to_value(&v).unwrap_or(serde_json::Value::Null);
+            chapters.push((loc, json));
+        }
+    }
+    chapters.sort_by_key(|(l, _)| l.map(|x| x.hash()));
+
+    // <nbt-summary>: content blocks. Render their plain-text form.
+    let mut summaries: Vec<(Option<Location>, String)> = Vec::new();
+    for c in introspector.query(&Selector::Label(summary_label)) {
+        let text = plain_text_of(&c);
+        let loc = by_location(&c);
+        summaries.push((loc, text));
+    }
+    summaries.sort_by_key(|(l, _)| l.map(|x| x.hash()));
+
+    Ok(SeriesMetadata {
+        chapter_metadata: chapters.into_iter().map(|(_, v)| v).collect(),
+        summaries: summaries.into_iter().map(|(_, s)| s).collect(),
+    })
+}
+
+/// Best-effort plain-text extraction from Typst content. Walks into sequences
+/// and styled nodes; unrecognized elements contribute an empty string.
+fn plain_text_of(content: &typst::foundations::Content) -> String {
+    use typst::foundations::Value;
+    // The easiest path is to serialize and pull out string leaves; Content
+    // doesn't expose a canonical "to plain text" but `#text` elements carry
+    // the string in their `text` field.
+    fn walk(content: &typst::foundations::Content, out: &mut String) {
+        if let Ok(Value::Str(s)) = content.field_by_name("text") {
+            out.push_str(s.as_str());
+            return;
+        }
+        if let Ok(Value::Content(body)) = content.field_by_name("body") {
+            walk(&body, out);
+            return;
+        }
+        if let Ok(Value::Array(arr)) = content.field_by_name("children") {
+            for item in arr.iter() {
+                if let Value::Content(c) = item {
+                    walk(c, out);
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(content, &mut out);
+    out.trim().to_string()
+}
+
 pub fn render_world_with_extraction(world: &RenderWorld, repo_path: Option<&Path>) -> anyhow::Result<String> {
     let warned = typst::compile::<HtmlDocument>(&world);
     let mut document = warned.output.map_err(|diags| {
@@ -411,15 +536,16 @@ fn build_auto_concat_source(
     build_auto_concat_source_from_files(&file_names, repo_path)
 }
 
-/// Read chapter order from meta.json. Falls back to sorted directory scan.
+/// Read chapter order from meta.yaml's `chapters` list. Falls back to a
+/// sorted directory scan when the list is missing or empty.
 pub fn read_chapter_order(repo_path: &Path, ext: &str) -> Vec<String> {
-    // Try meta.json first
-    if let Ok(data) = std::fs::read_to_string(repo_path.join("meta.json")) {
-        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&data) {
-            if let Some(order) = meta.get("chapter_order").and_then(|v| v.as_array()) {
+    if let Ok(data) = std::fs::read_to_string(repo_path.join("meta.yaml")) {
+        if let Ok(meta) = serde_yml::from_str::<serde_yml::Value>(&data) {
+            if let Some(order) = meta.get("chapters").and_then(|v| v.as_sequence()) {
                 let files: Vec<String> = order
                     .iter()
                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|f| f.ends_with(ext))
                     .filter(|f| repo_path.join(f).exists())
                     .collect();
                 if !files.is_empty() {
@@ -428,7 +554,6 @@ pub fn read_chapter_order(repo_path: &Path, ext: &str) -> Vec<String> {
             }
         }
     }
-    // Fallback: scan repo root for matching files, sorted by name
     let mut files = Vec::new();
     if let Ok(entries) = std::fs::read_dir(repo_path) {
         for entry in entries.flatten() {
@@ -545,5 +670,33 @@ mod tests {
     fn test_render_error() {
         let result = render_typst_to_html("#invalid-func()");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn extract_metadata_from_labels() {
+        // Build a self-contained source (no main.typ on disk) and drive the
+        // introspector directly to avoid needing a temp repo dir.
+        let src = r#"
+= Introduction
+#metadata((teaches: ("intro",), prereqs: (("basics", "required"),))) <nbt-chapter>
+
+The intro chapter summary. <nbt-summary>
+
+= Advanced
+#metadata((teaches: ("advanced",))) <nbt-chapter>
+
+Advanced stuff overview. <nbt-summary>
+"#;
+        let world = RenderWorld::new(src);
+        let meta = query_labels(&world).expect("query should succeed");
+
+        assert_eq!(meta.chapter_metadata.len(), 2);
+        assert_eq!(
+            meta.chapter_metadata[0].get("teaches").and_then(|v| v.as_array()).map(|a| a.len()),
+            Some(1),
+        );
+        assert_eq!(meta.summaries.len(), 2);
+        assert!(meta.summaries[0].contains("intro chapter summary"));
+        assert!(meta.summaries[1].contains("Advanced stuff overview"));
     }
 }
