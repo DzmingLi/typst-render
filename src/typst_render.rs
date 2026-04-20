@@ -329,6 +329,140 @@ pub struct SeriesMetadata {
     pub summaries: Vec<String>,
 }
 
+/// Series-level metadata authored inside `main.typ` as:
+///
+/// ```typst
+/// #metadata((
+///   title: "Static Program Analysis",
+///   description: "Companion notes to NJU's SA course",
+///   cover: "cover.png",
+///   lang: "zh",
+///   topics: ("static-analysis", "compiler"),
+/// )) <nbt-series>
+/// ```
+///
+/// The struct intentionally mirrors the fields that would otherwise live in
+/// `meta.yaml`; for typst series the typst source is the source of truth and
+/// meta.yaml is not written.
+#[derive(Debug, Default, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesSummaryMeta {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub long_description: Option<String>,
+    pub cover: Option<String>,
+    pub lang: Option<String>,
+    pub category: Option<String>,
+    #[serde(default)]
+    pub topics: Vec<String>,
+    pub split_level: Option<u32>,
+}
+
+/// Render a `#metadata((...)) <nbt-series>` line from a summary struct.
+/// Used when seeding or updating `main.typ` so the source encodes the canonical
+/// series-level metadata (title, description, cover, etc.). Fields that are
+/// None/empty are omitted to keep the output tidy.
+pub fn format_series_summary_metadata(meta: &SeriesSummaryMeta) -> String {
+    fn esc(s: &str) -> String { s.replace('\\', r"\\").replace('"', r#"\""#) }
+    let mut entries: Vec<String> = Vec::new();
+    if let Some(ref v) = meta.title       { entries.push(format!(r#"title: "{}""#,       esc(v))); }
+    if let Some(ref v) = meta.description { entries.push(format!(r#"description: "{}""#, esc(v))); }
+    if let Some(ref v) = meta.long_description { entries.push(format!(r#"longDescription: "{}""#, esc(v))); }
+    if let Some(ref v) = meta.cover       { entries.push(format!(r#"cover: "{}""#,       esc(v))); }
+    if let Some(ref v) = meta.lang        { entries.push(format!(r#"lang: "{}""#,        esc(v))); }
+    if let Some(ref v) = meta.category    { entries.push(format!(r#"category: "{}""#,    esc(v))); }
+    if !meta.topics.is_empty() {
+        let items = meta.topics.iter().map(|t| format!(r#""{}""#, esc(t))).collect::<Vec<_>>().join(", ");
+        // Single-element tuples in typst need a trailing comma.
+        let body = if meta.topics.len() == 1 { format!("{items},") } else { items };
+        entries.push(format!("topics: ({body})"));
+    }
+    if let Some(v) = meta.split_level { entries.push(format!("splitLevel: {v}")); }
+    format!("#metadata(({})) <nbt-series>", entries.join(", "))
+}
+
+/// Replace (or insert at top) the single `#metadata(...) <nbt-series>` line in
+/// a typst source so it matches `meta`. Any existing such line — whether on one
+/// line or spread across multiple — is removed first. When the source has no
+/// content yet, the metadata line is all that's written.
+pub fn upsert_typst_series_summary(source: &str, meta: &SeriesSummaryMeta) -> String {
+    let stripped = strip_typst_label_block(source, "nbt-series");
+    let line = format_series_summary_metadata(meta);
+    if stripped.trim().is_empty() {
+        format!("{line}\n")
+    } else if stripped.starts_with('\n') {
+        format!("{line}{stripped}")
+    } else {
+        format!("{line}\n{stripped}")
+    }
+}
+
+/// Find and strip a `#metadata(...) <label>` directive from a typst source.
+/// The directive can be written on a single line or spanning many — parentheses
+/// are balanced so we handle multi-line payloads correctly.
+fn strip_typst_label_block(source: &str, label: &str) -> String {
+    let marker = format!("<{label}>");
+    let Some(marker_at) = source.find(&marker) else { return source.to_string(); };
+
+    // Walk back from the marker to find the matching `#metadata(` start.
+    // Accept only whitespace between `))` and `<label>`.
+    let before = &source[..marker_at];
+    let trimmed_end = before.trim_end();
+    if !trimmed_end.ends_with("))") { return source.to_string(); }
+
+    // Scan backwards balancing parens to locate the matching `#metadata(`.
+    let bytes = trimmed_end.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b')' => depth += 1,
+            b'(' => { depth -= 1; if depth == 0 { break; } }
+            _ => {}
+        }
+    }
+    if depth != 0 { return source.to_string(); }
+    // `i` now points at the outermost `(`. `#metadata` should precede it.
+    let head = &trimmed_end[..i];
+    let Some(meta_start) = head.rfind("#metadata") else { return source.to_string(); };
+
+    // Drop everything from `#metadata` up to the first newline after `<label>`.
+    let marker_end = marker_at + marker.len();
+    let after = &source[marker_end..];
+    let drop_extra = after.bytes().take_while(|b| *b != b'\n').count();
+    let resume = marker_end + drop_extra + if source[marker_end + drop_extra..].starts_with('\n') { 1 } else { 0 };
+    let mut out = String::with_capacity(source.len());
+    out.push_str(&source[..meta_start]);
+    out.push_str(&source[resume..]);
+    out
+}
+
+/// Query a typst series repo for its `<nbt-series>` summary metadata. Returns
+/// `None` if the repo has no main.typ, the file won't compile, or the label
+/// is absent.
+pub fn extract_typst_series_summary(repo_path: &Path, config: &RenderConfig) -> Option<SeriesSummaryMeta> {
+    use typst::foundations::Selector;
+    let main_path = repo_path.join("main.typ");
+    let source = std::fs::read_to_string(&main_path).ok()?;
+    let world = RenderWorld::with_series_preamble(&source, Some(repo_path), config);
+    let warned = typst::compile::<HtmlDocument>(&world);
+    let document = warned.output.ok()?;
+    let label = typst::foundations::Label::construct(
+        typst::foundations::Str::from("nbt-series"),
+    ).ok()?;
+    for c in document.introspector.query(&Selector::Label(label)) {
+        if let Ok(val) = c.field_by_name("value") {
+            if let Ok(json) = serde_json::to_value(&val) {
+                if let Ok(meta) = serde_json::from_value::<SeriesSummaryMeta>(json) {
+                    return Some(meta);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn query_labels(world: &RenderWorld) -> anyhow::Result<SeriesMetadata> {
     use typst::foundations::Selector;
     use typst::introspection::Location;
