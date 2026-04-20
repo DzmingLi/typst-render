@@ -285,6 +285,38 @@ pub fn extract_series_metadata(
     query_labels(&world)
 }
 
+/// Extract a standalone article's declared cover by compiling `content.typ`
+/// with the default article preamble and querying the `<nbt-article>` label.
+///
+/// Authors annotate covers as:
+/// ```typst
+/// #metadata(("cover": "assets/fig.png")) <nbt-article>
+/// ```
+/// The `value` payload is a dictionary; we read its `cover` key. Returns None
+/// if there's no such metadata node, or it doesn't carry a `cover` field.
+pub fn extract_typst_article_cover(repo_path: &Path, config: &RenderConfig) -> Option<String> {
+    use typst::foundations::Selector;
+    let content_path = repo_path.join("content.typ");
+    let source = std::fs::read_to_string(&content_path).ok()?;
+    let world = RenderWorld::with_config(&source, Some(repo_path), config);
+    let warned = typst::compile::<HtmlDocument>(&world);
+    let document = warned.output.ok()?;
+    let label = typst::foundations::Label::construct(
+        typst::foundations::Str::from("nbt-article"),
+    ).ok()?;
+    for c in document.introspector.query(&Selector::Label(label)) {
+        if let Ok(val) = c.field_by_name("value") {
+            let json = serde_json::to_value(&val).ok()?;
+            if let Some(cover) = json.get("cover").and_then(|v| v.as_str()) {
+                if !cover.is_empty() {
+                    return Some(cover.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Chapter-level and summary metadata extracted from a compiled Typst series.
 #[derive(Debug, Default, Clone)]
 pub struct SeriesMetadata {
