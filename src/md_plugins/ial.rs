@@ -7,32 +7,12 @@
 //! after parsing and merges IAL paragraphs into their preceding sibling.
 
 use markdown_it::parser::core::CoreRule;
-use markdown_it::{MarkdownIt, Node, NodeValue, Renderer};
+use markdown_it::{MarkdownIt, Node};
 
-#[derive(Debug)]
-struct IalWrapper {
-    classes: Vec<String>,
-    id: Option<String>,
-}
-
-impl NodeValue for IalWrapper {
-    fn render(&self, node: &Node, fmt: &mut dyn Renderer) {
-        let mut attrs = node.attrs.clone();
-        if !self.classes.is_empty() {
-            attrs.push(("class", self.classes.join(" ")));
-        }
-        if let Some(ref id) = self.id {
-            attrs.push(("id", id.clone()));
-        }
-        fmt.cr();
-        fmt.open("div", &attrs);
-        fmt.cr();
-        fmt.contents(&node.children);
-        fmt.cr();
-        fmt.close("div");
-        fmt.cr();
-    }
-}
+// Note: an earlier iteration wrapped each IAL-attributed block in a custom
+// `IalWrapper` NodeValue with its own `render` method. That approach was
+// abandoned — the current rule mutates `node.attrs` on the preceding/current
+// sibling directly, so no wrapper type is needed.
 
 /// Regex for a paragraph that contains only `{: .class #id }`.
 fn parse_ial_text(text: &str) -> Option<(Vec<String>, Option<String>)> {
