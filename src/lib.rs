@@ -22,6 +22,50 @@ pub fn fx_render_config() -> RenderConfig {
     }
 }
 
+/// Payload for `/api/render/(typst|latex)-snippet`. Shared across apps so
+/// handler definitions don't drift.
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct SnippetRequest {
+    pub formula: String,
+    /// true = display math (centred block), false = inline.
+    pub display: bool,
+}
+
+/// Response shape for the snippet endpoints.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct SnippetResponse {
+    pub html: String,
+}
+
+/// Render a single Typst math formula as an HTML fragment.
+/// Wraps the expression in `$ ... $` (display) or `$...$` (inline) and
+/// compiles through `render_typst_to_html`. Empty input returns `""`.
+///
+/// Shared implementation for `/api/render/typst-snippet` endpoints across
+/// apps — don't duplicate the wrapping logic elsewhere.
+pub fn render_typst_math_snippet(formula: &str, display: bool) -> anyhow::Result<String> {
+    let trimmed = formula.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    let source = if display {
+        format!("$ {trimmed} $\n")
+    } else {
+        format!("${trimmed}$\n")
+    };
+    typst_render::render_typst_to_html(&source)
+}
+
+/// Render a single LaTeX math formula as MathML.
+/// Same contract as `render_typst_math_snippet` but for LaTeX input.
+pub fn render_latex_math_snippet(formula: &str, display: bool) -> anyhow::Result<String> {
+    let trimmed = formula.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    markdown_render::render_latex_to_mathml(trimmed, display)
+}
+
 /// Map a content format identifier to its canonical file extension.
 pub fn format_extension(format: &str) -> &'static str {
     match format {
